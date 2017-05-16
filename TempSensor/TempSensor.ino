@@ -322,8 +322,9 @@ void setup() {
   blinkOn();
   updateTemp();
   t.every(SEND_TEMP_INTERVAL, sendTemperature);
-  if(readSettings())
+  if(readSettings()) {    
     startWiFi();
+  }
 }
 
 /*
