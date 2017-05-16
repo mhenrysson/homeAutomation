@@ -1,0 +1,10 @@
+mosquitto:
+  restart: always
+  image: eclipse-mosquitto:1.4.10
+  ports:
+   - 192.168.112.1:1883:1883
+   - 192.168.112.1:9001:9001
+  volumes:
+   - ./mosquitto/config:/mosquitto/config:Z
+   - ./mosquitto/data:/mosquitto/data:Z
+   - ./mosquitto/log:/mosquitto/log:Z
