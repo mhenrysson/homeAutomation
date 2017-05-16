@@ -6,14 +6,19 @@
 #include <Timer.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <PubSubClient.h>
 
 #define blinker(h, l) blinkOnTime=h;blinkOffTime=l;
 
 #define lowarg server.arg("lowerwarn")
 #define upparg server.arg("upperwarn")
 #define sensorarg server.arg("sensorID")
+#define mqttarg server.arg("mqttServer")
 #define ssidarg server.arg("ssid")
 #define passarg server.arg("password")
+
+#define NOWIFISPEC "NoWiFiYet"
+#define BAUDRATE 115200
 
 /* Set these to your desired credentials. */
 const char *APssid = "TempSensor";
@@ -23,9 +28,13 @@ const int SEND_TEMP_INTERVAL = 30000;   // Time in ms between meter reading tran
 const uint8_t buttonPin = D1;
 const uint8_t oneWirePin = D2;
 
-char *sensorID = "TempSensorPreInit";
-char *ssid = "NoWiFiYetAndNowEvenMorSoCauseThisIsVeryLongYes";
-char *password = "SnowmanAndTheFalconInTheSnowStorm";
+char *sensorID = "TempSensor";
+char *ssid = NOWIFISPEC;
+char *password = "isthereaspoon";
+char *mqttServer = "mqtt.example.local";
+int mqttPort = 1883;
+IPAddress mqttServerIP(192, 168, 112, 1);
+// TODO: Add MQTT port and topic
 
 bool isAP = false;
 int blinkOnTime = 1000;  // Time interval in ms onboard led is on
@@ -34,11 +43,14 @@ char temperatureString[6];
 float temp;
 float upperWarn = 80.0;
 float lowerWarn = -120.0;
+int wiFiTimerID = -1;
 
 ESP8266WebServer server(80);
 Timer t;
 OneWire oneWire(oneWirePin);
 DallasTemperature DS18B20(&oneWire);
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 /* Timer-administered onboard led blink.
  *  Use blinkOnTime to set time interval in ms for led to be on
@@ -60,15 +72,13 @@ void blinkOff() {
 bool saveSettings() {
   DynamicJsonBuffer jsonBuffer;
   JsonObject& root = jsonBuffer.createObject();
-  Serial.print("And now ssid is |");
-  Serial.print(ssid);
-  Serial.println("|");
   root["ssid"] = ssid;
   root["password"] = password;
   root["sensorID"] = sensorID;
+  root["mqttServer"] = mqttServer;
   root["upperWarn"] = upperWarn;
   root["lowerWarn"] = lowerWarn;
-  Serial.println("Created new wifi json.");
+  Serial.println("Updated unit configurations.");
   root.prettyPrintTo(Serial);
   Serial.println();
   File f = SPIFFS.open(CONFIGFILE, "w");
@@ -92,9 +102,6 @@ void APLoop() {
     blinker(300, 50);
   }    
   server.handleClient();
-  t.update();
-  if(isAP)
-    APLoop();
 }
 
 /*
@@ -122,7 +129,6 @@ void startAP() {
   Serial.println("HTTP server started");
   t.after(600000, stopAP);
   isAP = true;
-  APLoop();
 }
 
 /* Go to http://192.168.4.1 in a web browser
@@ -140,6 +146,10 @@ bool handleRequest() {
     if(server.hasArg("sensorID") && sensorarg.length() > 0) {
       sensorID = new char[sensorarg.length() + 1];
       sensorarg.toCharArray(sensorID, sensorarg.length() + 1);
+    }
+    if(server.hasArg("mqttServer") && mqttarg.length() > 0) {
+      mqttServer = new char[mqttarg.length() + 1];
+      mqttarg.toCharArray(mqttServer, mqttarg.length() + 1);
     }
     if(server.hasArg("lowerwarn") && lowarg.length() > 0) {
       if(lowarg.toFloat() != 0.00 || lowarg.charAt(0) == '0')
@@ -163,13 +173,12 @@ bool handleRequest() {
       if(startWiFi())
         return true;
       else {
-        server.send(200, "text/html", "WiFi configuration failed.");
         Serial.println("WiFi config update failed.");
         return false;
       }
     }
   } else {
-    String form = "<form method=\"get\"><div><label>SSID</label><input name=\"ssid\" value=\"" + String(ssid) + "\"></div><div><label>Password</label><input name=\"password\" type=\"password\" value=\"" + String(password) + "\"></div><div><label>Sensor ID</label><input name=\"sensorID\" value=\"" + String(sensorID) + "\"></div><div><label>Warn above</label><input name=\"upperwarn\" value=\"" + String(upperWarn) + "\"></div><div><label>Warn below</label><input name=\"lowerwarn\" value=\"" + String(lowerWarn) + "\"></div><div><button>Submit</button></div></form>";
+    String form = "<form method=\"get\"><div><label>SSID</label><input name=\"ssid\" value=\"" + String(ssid) + "\"></div><div><label>Password</label><input name=\"password\" type=\"password\" value=\"" + String(password) + "\"></div><div><label>Sensor ID</label><input name=\"sensorID\" value=\"" + String(sensorID) + "\"></div><div><label>MQTT Server</label><input name=\"mqttServer\" value=\"" + String(mqttServer) + "\"></div><div><label>Warn above</label><input name=\"upperwarn\" value=\"" + String(upperWarn) + "\"></div><div><label>Warn below</label><input name=\"lowerwarn\" value=\"" + String(lowerWarn) + "\"></div><div><button>Submit</button></div></form>";
     Serial.println("No arguments.");
     server.send(200, "text/html", form);
     Serial.println("Form sent.");
@@ -207,14 +216,18 @@ bool readSettings() {
   s.toCharArray(password, s.length() + 1);
   s = root["sensorID"].as<String>();
   s.toCharArray(sensorID, s.length() + 1);
+  s = root["mqttServer"].as<String>();
+  s.toCharArray(mqttServer, s.length() + 1);
   lowerWarn = root["lowerWarn"].as<float>();
   upperWarn = root["upperWarn"].as<float>();
   Serial.print("ssid: ");
   Serial.println(ssid);
   Serial.print("password: ");
-  Serial.println(password);         
+  Serial.println(password);    // Saved on flash mem, so no secret anyway...        
   Serial.print("sensorID: ");
   Serial.println(sensorID);         
+  Serial.print("MQTT Server: ");
+  Serial.println(mqttServer);         
   Serial.print("lowerWarn: ");
   Serial.println(lowerWarn);         
   Serial.print("upperWarn: ");
@@ -227,20 +240,28 @@ bool readSettings() {
  * Start WiFi in Station mode
  */
 bool startWiFi() {
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting");
-  int i = 0;
-  while (WiFi.status() != WL_CONNECTED && i++ < 25) {
-    delay(200);
-    Serial.print(".");
+  if(strcmp(ssid, NOWIFISPEC)!=0) {
+    Serial.println("No WiFi specfied.");
+  } else {
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting");
+    int i = 0;
+    while (WiFi.status() != WL_CONNECTED && i++ < 50) {
+      delay(200);
+      Serial.print(".");
+    }
+    Serial.println();
   }
-  Serial.println();
   if(WiFi.status() != WL_CONNECTED) {
     Serial.println("Could not connect to WiFi. Aborting.");
+    wiFiTimerID = t.after(300000, [](){startWiFi(); return;});
     return false;
   }
+  wiFiTimerID = -1;
   Serial.print("Connected. IP: ");
   Serial.println(WiFi.localIP());
+//  client.setServer(mqttServer, mqttPort);
+  client.setServer(mqttServerIP, mqttPort);
   return true;
 }
 
@@ -265,7 +286,16 @@ void sendTemperature() {
   Serial.print("Current temperature: ");
   Serial.println(t);
   if(WiFi.status() == WL_CONNECTED) {
-     Serial.println("TODO: Transmitting temperature.");
+     if(!client.connected()) {
+       Serial.println("Connecting to MQTT server.");
+       if(!client.connect(sensorID)) {
+        Serial.println("MQTT connection failed.");
+       }
+     }
+     if(client.connected()) {
+       Serial.println("Transmitting temperature.");
+       client.publish("TempReading", t);
+     }
   }
 }
 
@@ -273,7 +303,7 @@ void sendTemperature() {
  * Setup nodeMCU unit. Called at boot time.
  */
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(BAUDRATE);
   delay(1000);
   Serial.println();
   WiFi.disconnect(true);
@@ -300,14 +330,21 @@ void setup() {
  * Main loop. Called repeatedly after setup finished.
  */
 void loop() {
-  if(digitalRead(buttonPin) == HIGH)
-    startAP();
-  if(temp > upperWarn || temp < lowerWarn) {
-    blinker(75, 75);
-  } else if(WiFi.status() != WL_CONNECTED) {
-    blinker(1500, 300);
+  if(isAP) {
+    APLoop();
   } else {
-    blinker(150, 10000);
+    if(digitalRead(buttonPin) == HIGH)
+      startAP();
+    if(WiFi.status() != WL_CONNECTED){
+      blinker(1500, 300);
+      if(wiFiTimerID < 0)
+        startWiFi();
+    } else {
+      blinker(150, 10000);
+    }
+    if(temp > upperWarn || temp < lowerWarn) {
+      blinker(75, 75);
+    }
   }
   t.update();
 }
