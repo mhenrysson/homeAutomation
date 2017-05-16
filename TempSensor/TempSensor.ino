@@ -31,8 +31,9 @@ const uint8_t oneWirePin = D2;
 char *sensorID = "TempSensor";
 char *ssid = NOWIFISPEC;
 char *password = "isthereaspoon";
-char *mqttServer = "192.168.112.1";
+char *mqttServer = "mqtt.example.local";
 int mqttPort = 1883;
+IPAddress mqttServerIP(192, 168, 112, 1);
 // TODO: Add MQTT port and topic
 
 bool isAP = false;
@@ -259,7 +260,8 @@ bool startWiFi() {
   wiFiTimerID = -1;
   Serial.print("Connected. IP: ");
   Serial.println(WiFi.localIP());
-  client.setServer(mqttServer, mqttPort);
+//  client.setServer(mqttServer, mqttPort);
+  client.setServer(mqttServerIP, mqttPort);
   return true;
 }
 
@@ -328,9 +330,9 @@ void setup() {
  * Main loop. Called repeatedly after setup finished.
  */
 void loop() {
-  if(isAP)
+  if(isAP) {
     APLoop();
-  else {
+  } else {
     if(digitalRead(buttonPin) == HIGH)
       startAP();
     if(WiFi.status() != WL_CONNECTED){
@@ -340,8 +342,9 @@ void loop() {
     } else {
       blinker(150, 10000);
     }
-    if(temp > upperWarn || temp < lowerWarn)
+    if(temp > upperWarn || temp < lowerWarn) {
       blinker(75, 75);
+    }
   }
   t.update();
 }
