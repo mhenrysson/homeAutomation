@@ -10,6 +10,26 @@
 
 #define blinker(h, l) blinkOnTime=h;blinkOffTime=l;
 
+#define NORMAL_BLINK_ON 150
+#define NORMAL_BLINK_OFF 10000
+#define NO_WIFI_BLINK_ON 1500
+#define NO_WIFI_BLINK_OFF 300
+#define TEMP_WARN_BLINK_ON 75
+#define TEMP_WARN_BLINK_OFF 75
+#define AP_NO_CLIENT_BLINK_ON 150
+#define AP_NO_CLIENT_BLINK_OFF 150
+#define AP_CONNECTED_BLINK_ON 300
+#define AP_CONNECTED_BLINK_OFF 50
+
+#define SEND_TEMP_INTERVAL 30000
+#define AP_SSID "TempSensor"
+#define AP_PASSWORD "thereisnospoon"
+#define CONFIGFILE "config.json"
+#define BUTTONPIN D1
+#define ONEWIREPIN D2
+#define NO_WIFI_SPEC "NoWiFiYet"
+#define BAUDRATE 115200
+
 #define lowarg server.arg("lowerwarn")
 #define upparg server.arg("upperwarn")
 #define sensorarg server.arg("sensorID")
@@ -17,24 +37,13 @@
 #define ssidarg server.arg("ssid")
 #define passarg server.arg("password")
 
-#define NOWIFISPEC "NoWiFiYet"
-#define BAUDRATE 115200
-
-/* Set these to your desired credentials. */
-const char *APssid = "TempSensor";
-const char *APpassword = "thereisnospoon";
-const char *CONFIGFILE = "config.json";
-const int SEND_TEMP_INTERVAL = 30000;   // Time in ms between meter reading transmissions
-const uint8_t buttonPin = D1;
-const uint8_t oneWirePin = D2;
-
 char *sensorID = "TempSensor";
-char *ssid = NOWIFISPEC;
+char *ssid = NO_WIFI_SPEC;
 char *password = "isthereaspoon";
 char *mqttServer = "mqtt.example.local";
-int mqttPort = 1883;
-IPAddress mqttServerIP(192, 168, 112, 1);
-// TODO: Add MQTT port and topic
+uint16_t mqttPort = 1883;
+char *topic = "/tempReadings";
+// TODO: Add MQTT port and topic to web form
 
 bool isAP = false;
 int blinkOnTime = 1000;  // Time interval in ms onboard led is on
@@ -47,10 +56,10 @@ int wiFiTimerID = -1;
 
 ESP8266WebServer server(80);
 Timer t;
-OneWire oneWire(oneWirePin);
+OneWire oneWire(ONEWIREPIN);
 DallasTemperature DS18B20(&oneWire);
 WiFiClient espClient;
-PubSubClient client(espClient);
+PubSubClient psClient(espClient);
 
 /* Timer-administered onboard led blink.
  *  Use blinkOnTime to set time interval in ms for led to be on
@@ -97,9 +106,9 @@ bool saveSettings() {
  */
 void APLoop() {
   if(WiFi.softAPgetStationNum() == 0) {
-    blinker(150, 150);
+    blinker(AP_NO_CLIENT_BLINK_ON, AP_NO_CLIENT_BLINK_OFF);
   } else {
-    blinker(300, 50);
+    blinker(AP_CONNECTED_BLINK_ON, AP_CONNECTED_BLINK_OFF);
   }    
   server.handleClient();
 }
@@ -115,11 +124,15 @@ void stopAP() {
 /*
  * Start WiFi Access Point mode
  */
-void startAP() {  
+void startAP() {
+  if(wiFiTimerID > 0) {
+    t.stop(wiFiTimerID);
+    wiFiTimerID = -1;  
+  }
   Serial.println("Disconnects and clears current WiFi settings.");
   WiFi.disconnect(true);
   Serial.println("Configuring access point...");
-  WiFi.softAP(APssid, APpassword);
+  WiFi.softAP(AP_SSID, AP_PASSWORD);
   delay(300);
   IPAddress myIP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -170,15 +183,21 @@ bool handleRequest() {
       Serial.println("Settings updated. Stopping AP and connects to WiFi.");
       stopAP();
       delay(500);
-      if(startWiFi())
+      if(startWiFi()) {
         return true;
-      else {
+      } else {
         Serial.println("WiFi config update failed.");
         return false;
       }
     }
   } else {
-    String form = "<form method=\"get\"><div><label>SSID</label><input name=\"ssid\" value=\"" + String(ssid) + "\"></div><div><label>Password</label><input name=\"password\" type=\"password\" value=\"" + String(password) + "\"></div><div><label>Sensor ID</label><input name=\"sensorID\" value=\"" + String(sensorID) + "\"></div><div><label>MQTT Server</label><input name=\"mqttServer\" value=\"" + String(mqttServer) + "\"></div><div><label>Warn above</label><input name=\"upperwarn\" value=\"" + String(upperWarn) + "\"></div><div><label>Warn below</label><input name=\"lowerwarn\" value=\"" + String(lowerWarn) + "\"></div><div><button>Submit</button></div></form>";
+    String form = "<form method=\"get\"><div><label>SSID</label><input name=\"ssid\" value=\"" + String(ssid) 
+        + "\"></div><div><label>Password</label><input name=\"password\" type=\"password\" value=\"" + String(password) 
+        + "\"></div><div><label>Sensor ID</label><input name=\"sensorID\" value=\"" + String(sensorID) 
+        + "\"></div><div><label>MQTT Server</label><input name=\"mqttServer\" value=\"" + String(mqttServer) 
+        + "\"></div><div><label>Warn above</label><input name=\"upperwarn\" value=\"" + String(upperWarn) 
+        + "\"></div><div><label>Warn below</label><input name=\"lowerwarn\" value=\"" + String(lowerWarn) 
+        + "\"></div><div><button>Submit</button></div></form>";
     Serial.println("No arguments.");
     server.send(200, "text/html", form);
     Serial.println("Form sent.");
@@ -211,12 +230,16 @@ bool readSettings() {
     return false;
   }
   String s = root["ssid"].as<String>();
+  ssid = new char[s.length() + 1];
   s.toCharArray(ssid, s.length() + 1);
   s = root["password"].as<String>();
+  password = new char[s.length() + 1];
   s.toCharArray(password, s.length() + 1);
   s = root["sensorID"].as<String>();
+  sensorID = new char[s.length() + 1];
   s.toCharArray(sensorID, s.length() + 1);
   s = root["mqttServer"].as<String>();
+  mqttServer = new char[s.length() + 1];
   s.toCharArray(mqttServer, s.length() + 1);
   lowerWarn = root["lowerWarn"].as<float>();
   upperWarn = root["upperWarn"].as<float>();
@@ -240,7 +263,10 @@ bool readSettings() {
  * Start WiFi in Station mode
  */
 bool startWiFi() {
-  if(strcmp(ssid, NOWIFISPEC)!=0) {
+  if(wiFiTimerID > 0) {
+    t.stop(wiFiTimerID);
+  }
+  if(strcmp(ssid, NO_WIFI_SPEC)==0) {
     Serial.println("No WiFi specfied.");
   } else {
     WiFi.begin(ssid, password);
@@ -260,20 +286,40 @@ bool startWiFi() {
   wiFiTimerID = -1;
   Serial.print("Connected. IP: ");
   Serial.println(WiFi.localIP());
-//  client.setServer(mqttServer, mqttPort);
-  client.setServer(mqttServerIP, mqttPort);
   return true;
+}
+
+/*
+ * Configres and connects psClient
+ */
+bool connectMQTTClient() {
+    Serial.print("Connecting to MQTT server at ");
+    Serial.print(mqttServer);
+    Serial.print(":");
+    Serial.println(mqttPort);
+    psClient.setServer(mqttServer, mqttPort);
+    if(psClient.connect(sensorID)) {
+      Serial.println("MQTT connection successful.");
+      return true;
+    } else {
+      Serial.print("MQTT connection failed. State: ");
+      Serial.println(psClient.state());
+      return false;
+    }    
 }
 
 /*
  * Get temperature reading
  */
 void updateTemp() {
+  Serial.print("Getting temperature reading");
   do {
     DS18B20.requestTemperatures(); 
     temp = DS18B20.getTempCByIndex(0);
+    Serial.print(".");
     delay(100);
   } while (temp == 85.0 || temp == (-127.0));
+  Serial.println();
 }
 
 /*
@@ -286,15 +332,12 @@ void sendTemperature() {
   Serial.print("Current temperature: ");
   Serial.println(t);
   if(WiFi.status() == WL_CONNECTED) {
-     if(!client.connected()) {
-       Serial.println("Connecting to MQTT server.");
-       if(!client.connect(sensorID)) {
-        Serial.println("MQTT connection failed.");
-       }
+     if(!psClient.connected()) {
+       connectMQTTClient();
      }
-     if(client.connected()) {
+     if(psClient.connected()) {
        Serial.println("Transmitting temperature.");
-       client.publish("TempReading", t);
+       psClient.publish(topic, t);
      }
   }
 }
@@ -309,7 +352,7 @@ void setup() {
   WiFi.disconnect(true);
   WiFi.softAPdisconnect(true);
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(buttonPin, INPUT);
+  pinMode(BUTTONPIN, INPUT);
   SPIFFS.begin();
   FSInfo fs_info;
   if(!SPIFFS.info(fs_info)) {
@@ -320,11 +363,12 @@ void setup() {
   Serial.printf("Total file system size: %i\n", fs_info.totalBytes);
   Serial.printf("Used: %i\n", fs_info.usedBytes);
   blinkOn();
+  Serial.println("Initialising temp sensor");
   updateTemp();
+  readSettings();   
+  startWiFi();
+  connectMQTTClient();
   t.every(SEND_TEMP_INTERVAL, sendTemperature);
-  if(readSettings()) {    
-    startWiFi();
-  }
 }
 
 /*
@@ -334,21 +378,23 @@ void loop() {
   if(isAP) {
     APLoop();
   } else {
-    if(digitalRead(buttonPin) == HIGH)
+    if(digitalRead(BUTTONPIN) == HIGH) {
       startAP();
+    }
     if(WiFi.status() != WL_CONNECTED){
-      blinker(1500, 300);
-      if(wiFiTimerID < 0)
+      blinker(NO_WIFI_BLINK_ON, NO_WIFI_BLINK_OFF);
+      if(wiFiTimerID < 0) {
         startWiFi();
+      }
     } else {
-      blinker(150, 10000);
+      blinker(NORMAL_BLINK_ON, NORMAL_BLINK_OFF);
     }
     if(temp > upperWarn || temp < lowerWarn) {
-      blinker(75, 75);
+      blinker(TEMP_WARN_BLINK_ON, TEMP_WARN_BLINK_OFF);
     }
+    psClient.loop();
   }
   t.update();
 }
-
 
 
