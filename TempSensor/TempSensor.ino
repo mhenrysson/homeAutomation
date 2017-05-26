@@ -337,7 +337,8 @@ void sendTemperature() {
      }
      if(psClient.connected()) {
        Serial.println("Transmitting temperature.");
-       psClient.publish(topic, t);
+       String msg = "temp:" + String(t) + "\nsensor:" + String(sensorID);
+       psClient.publish(topic, msg.c_str());
      }
   }
 }
