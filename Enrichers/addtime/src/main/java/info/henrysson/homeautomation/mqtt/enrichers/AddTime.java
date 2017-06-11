@@ -82,7 +82,6 @@ public class AddTime implements MqttCallback {
     String newTopic = s.substring(ENRICH_TOPIC.length());
     JsonObject message = gson.fromJson(new String(mqttMessage.getPayload()), JsonObject.class);
     message.addProperty("time", DATE_FORMAT.format(new Date()));
-    System.out.println(message);
     mqttMessage.setPayload(message.toString().getBytes());
     client.publish(newTopic, mqttMessage);
   }
