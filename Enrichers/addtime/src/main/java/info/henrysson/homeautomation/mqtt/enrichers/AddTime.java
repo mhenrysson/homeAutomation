@@ -10,19 +10,36 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Created by Mattias on 2017-06-10.
+ *
+ * Subsribes to mqtt topic ENRICH_TOPIC/#
+ * When a message is published, AddTime grabs the message,
+ * adds a time stamp and publishes on remaining topic,
+ * i.e. messages published to <ENRICH_TOPIC>/<suffix> will
+ * be republished to topic <suffix>.
  */
 public class AddTime implements MqttCallback {
 
-  private static final String CLIENT_ID = "htester1";
-  private static final String BROKER_URL = "tcp://test.mosquitto.org:1883";
-  private static final String ENRICH_TOPIC = "/addtime";
-  private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+  private static String CLIENT_ID = "htester1";
+  private static String BROKER_URL = "tcp://test.mosquitto.org:1883";
+  private static String ENRICH_TOPIC = "/addtime";
+  private static SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
 
   private MqttClient client;
 
   public AddTime() {}
 
+  /***
+   * @param args = [MQTT_BROKER_URL [TOPIC_PATTERN_TO_ENRICH [MQTT_CLIENT_ID [DATE_FORMAT]]]]
+   */
   public static void main(String... args) {
+    if(args.length > 0)
+      BROKER_URL = args[0];
+    if(args.length > 1)
+      ENRICH_TOPIC = args[1];
+    if(args.length > 2)
+      CLIENT_ID = args[2];
+    if(args.length > 3)
+      DATE_FORMAT = new SimpleDateFormat(args[3]);
     new AddTime().connect();
   }
 
@@ -42,8 +59,12 @@ public class AddTime implements MqttCallback {
     }
   }
 
+  /**
+   * Automatic reconnect enabled so no need for reconnect in method.
+   * Sleep to avoid hammering broker.
+   */
   public void connectionLost(Throwable throwable) {
-    System.out.println("AddTime - Connection lost.");
+    System.out.println(DATE_FORMAT.format(new Date()) + " AddTime - Connection lost.");
     throwable.printStackTrace();
     try {
       TimeUnit.SECONDS.sleep(10);
@@ -52,6 +73,10 @@ public class AddTime implements MqttCallback {
     }
   }
 
+  /**
+   * Callback function for new messages on subscribed topics.
+   * Add time stamp to published message and republish
+   */
   public void messageArrived(String s, MqttMessage mqttMessage) throws Exception {
     Gson gson = new Gson();
     String newTopic = s.substring(ENRICH_TOPIC.length());
